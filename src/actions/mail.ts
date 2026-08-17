@@ -1,0 +1,220 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { requireUser } from "@/lib/requireUser";
+import { prisma } from "@/lib/db";
+import { mailboxFormSchema, sendEmailSchema } from "@/lib/definitions";
+import {
+  listInbox,
+  readMessage,
+  sendMail,
+  type InboxMessage,
+  type ReadMessage,
+} from "@/lib/mail";
+import { emitN8n } from "@/lib/n8n";
+
+export type MailActionState = { error?: string; ok?: boolean } | undefined;
+
+async function getOwnMailbox() {
+  const user = await requireUser();
+  const mailbox = await prisma.mailbox.findUnique({
+    where: { userId: user.id },
+  });
+  if (!mailbox) return null;
+  return mailbox;
+}
+
+export async function saveMailbox(
+  _prev: MailActionState,
+  formData: FormData
+): Promise<MailActionState> {
+  const user = await requireUser();
+
+  const parsed = mailboxFormSchema.safeParse({
+    name: formData.get("name"),
+    email: formData.get("email"),
+    password: formData.get("password"),
+    signature: formData.get("signature"),
+    imapHost: formData.get("imapHost"),
+    imapPort: formData.get("imapPort"),
+    smtpHost: formData.get("smtpHost"),
+    smtpPort: formData.get("smtpPort"),
+  });
+  if (!parsed.success) {
+    return { error: "Revisa los datos de la casilla (correo y contraseña son obligatorios)." };
+  }
+
+  const data = parsed.data;
+  const current = await prisma.mailbox.findUnique({
+    where: { userId: user.id },
+  });
+  const password = data.password || current?.password;
+
+  await prisma.mailbox.upsert({
+    where: { userId: user.id },
+    update: {
+      name: data.name,
+      email: data.email,
+      password,
+      signature: data.signature,
+      imapHost: data.imapHost,
+      imapPort: data.imapPort,
+      smtpHost: data.smtpHost,
+      smtpPort: data.smtpPort,
+    },
+    create: {
+      userId: user.id,
+      name: data.name,
+      email: data.email,
+      password: password ?? "",
+      signature: data.signature,
+      imapHost: data.imapHost,
+      imapPort: data.imapPort,
+      smtpHost: data.smtpHost,
+      smtpPort: data.smtpPort,
+    },
+  });
+
+  revalidatePath("/correos");
+  return { ok: true };
+}
+
+export async function deleteMailbox(): Promise<MailActionState> {
+  const user = await requireUser();
+  await prisma.mailbox.deleteMany({ where: { userId: user.id } });
+  revalidatePath("/correos");
+  return { ok: true };
+}
+
+function parseAddresses(value?: string): string[] {
+  if (!value) return [];
+  return value
+    .split(/[\s,;]+/)
+    .map((v) => v.trim().toLowerCase())
+    .filter((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
+}
+
+async function markLeadsContactado(recipients: string[]) {
+  if (recipients.length === 0) return;
+  const leads = await prisma.lead.findMany({
+    where: { status: "NUEVO" },
+    select: { id: true, name: true, email: true },
+  });
+  for (const lead of leads) {
+    const leadEmails = parseAddresses(lead.email ?? undefined);
+    if (leadEmails.some((e) => recipients.includes(e))) {
+      const updated = await prisma.lead.update({
+        where: { id: lead.id },
+        data: { status: "CONTACTADO" },
+      });
+      await emitN8n({
+        event: "lead.status_changed",
+        entity: "lead",
+        data: { id: updated.id, name: updated.name, status: updated.status },
+      });
+    }
+  }
+  revalidatePath("/leads");
+  revalidatePath("/dashboard");
+}
+
+export async function sendEmail(
+  _prev: MailActionState,
+  formData: FormData
+): Promise<MailActionState> {
+  const mailbox = await getOwnMailbox();
+  if (!mailbox) {
+    return { error: "Configura tu casilla de correo primero." };
+  }
+
+  const parsed = sendEmailSchema.safeParse({
+    to: formData.get("to"),
+    cc: formData.get("cc"),
+    bcc: formData.get("bcc"),
+    subject: formData.get("subject"),
+    message: formData.get("message"),
+    inReplyTo: formData.get("inReplyTo"),
+    references: formData.get("references"),
+  });
+  if (!parsed.success) {
+    return { error: "Revisa los campos: destinatario, asunto y mensaje." };
+  }
+
+  const data = parsed.data;
+  const signature = mailbox.signature?.trim();
+  const body = signature
+    ? `${data.message.replace(/\s+$/, "")}\n\n${signature}`
+    : data.message;
+
+  const files = formData
+    .getAll("attachments")
+    .filter((v): v is File => v instanceof File);
+  const attachments = await Promise.all(
+    files.map(async (file) => ({
+      filename: file.name,
+      content: Buffer.from(await file.arrayBuffer()),
+      contentType: file.type || undefined,
+    }))
+  );
+
+  try {
+    await sendMail(mailbox, {
+      to: data.to,
+      cc: data.cc,
+      bcc: data.bcc,
+      subject: data.subject,
+      text: body,
+      attachments,
+      inReplyTo: data.inReplyTo,
+      references: data.references,
+    });
+  } catch (e) {
+    console.error("Error enviando correo:", e);
+    return { error: "No se pudo enviar el correo. Verifica la configuración de la casilla." };
+  }
+
+  const recipients = [
+    ...parseAddresses(data.to),
+    ...parseAddresses(data.cc),
+    ...parseAddresses(data.bcc),
+  ];
+  await markLeadsContactado(recipients);
+
+  return { ok: true };
+}
+
+export async function readMessageAction(
+  mailboxId: string,
+  uid: number
+): Promise<ReadMessage | null> {
+  const user = await requireUser();
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { id: mailboxId, userId: user.id },
+  });
+  if (!mailbox) return null;
+  return readMessage(mailbox, uid);
+}
+
+export async function refreshInbox(
+  mailboxId: string,
+  limit = 30
+): Promise<InboxMessage[]> {
+  const user = await requireUser();
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { id: mailboxId, userId: user.id },
+  });
+  if (!mailbox) return [];
+  return listInbox(mailbox, limit);
+}
+
+export async function inboxPreview(
+  mailboxId: string,
+  limit = 100
+): Promise<Awaited<ReturnType<typeof listInbox>>> {
+  const user = await requireUser();
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { id: mailboxId, userId: user.id },
+  });
+  if (!mailbox) return [];
+  return listInbox(mailbox, limit);
+}

@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  VENDEDOR
+  TECNICO
+}
+
+enum LeadStatus {
+  NUEVO
+  CONTACTADO
+  EN_SEGUIMIENTO
+  VISITA_AGENDADA
+  COTIZADO
+  GANADO
+  PERDIDO
+  NO_CONTESTA
+}
+
+enum VisitStatus {
+  PROGRAMADA
+  CONFIRMADA
+  REALIZADA
+  CANCELADA
+  NO_ASISTIO
+}
+
+enum QuoteStatus {
+  BORRADOR
+  ENVIADA
+  APROBADA
+  RECHAZADA
+  VENCIDA
+}
+
+enum InteractionType {
+  LLAMADA
+  WHATSAPP
+  CORREO
+  REUNION
+  NOTA
+}
+
+enum TaskActionType {
+  LLAMADA
+  WHATSAPP
+  REUNION
+  CORREO
+  SEGUIMIENTO
+}
+
+model User {
+  id                String   @id @default(cuid())
+  name              String
+  email             String   @unique
+  password          String
+  role              Role     @default(VENDEDOR)
+  mustChangePassword Boolean @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  createdLeads   Lead[]        @relation("LeadCreatedBy")
+  assignedLeads  Lead[]        @relation("LeadAssignedTo")
+  visits         Visit[]
+  quotes         Quote[]
+  tasks          Task[]        @relation("TaskCreatedBy")
+  assignedTasks  Task[]        @relation("TaskAssignedTo")
+  interactions   Interaction[] @relation("InteractionCreatedBy")
+  mailbox        Mailbox?
+
+  @@map("users")
+}
+
+model Mailbox {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String   @default("Mi casilla")
+  email     String
+  password  String
+  signature String?
+  imapHost  String   @default("imap.titan.email")
+  imapPort  Int      @default(993)
+  smtpHost  String   @default("smtp.titan.email")
+  smtpPort  Int      @default(465)
+  updatedAt DateTime @updatedAt
+
+  @@map("mailboxes")
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  prefix      String
+  hashedKey   String    @unique
+  createdById String?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+
+  @@map("api_keys")
+}
+
+model Lead {
+  id            String     @id @default(cuid())
+  name          String
+  company       String?
+  email         String?
+  phone         String?
+  website       String?
+  extraContacts Json?
+  tags          String[]   @default([])
+  source        String?
+  status        LeadStatus @default(NUEVO)
+  notes         String?
+  messageId     String?
+  n8nId         String?    @unique
+  createdById   String?
+  createdBy     User?      @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedToId  String?
+  assignedTo    User?      @relation("LeadAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  visits       Visit[]
+  quotes       Quote[]
+  tasks        Task[]
+  interactions Interaction[]
+
+  @@map("leads")
+}
+
+model Visit {
+  id             String      @id @default(cuid())
+  leadId         String
+  lead           Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  scheduledFor   DateTime
+  status         VisitStatus @default(PROGRAMADA)
+  address        String?
+  technicianName String?
+  notes          String?
+  createdById    String?
+  createdBy      User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@map("visits")
+}
+
+model Quote {
+  id          String      @id @default(cuid())
+  leadId      String
+  lead        Lead        @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  amount      Decimal     @db.Decimal(12, 2)
+  currency    String      @default("USD")
+  description String?
+  status      QuoteStatus @default(BORRADOR)
+  createdById String?
+  createdBy   User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("quotes")
+}
+
+model Interaction {
+  id          String          @id @default(cuid())
+  leadId      String
+  lead        Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type        InteractionType @default(NOTA)
+  content     String
+  createdById String?
+  createdBy   User?           @relation("InteractionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime        @default(now())
+
+  @@map("interactions")
+}
+
+model Task {
+  id           String          @id @default(cuid())
+  leadId       String
+  lead         Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  title        String
+  actionType   TaskActionType  @default(SEGUIMIENTO)
+  dueDate      DateTime
+  notes        String?
+  completed    Boolean         @default(false)
+  completedAt  DateTime?
+  assignedToId String?
+  assignedTo   User?           @relation("TaskAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById  String?
+  createdBy    User?           @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@map("tasks")
+}
