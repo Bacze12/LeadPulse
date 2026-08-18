@@ -1,26 +1,38 @@
 import { requireUser } from "@/lib/requireUser";
 import { prisma } from "@/lib/db";
-import { inboxPreview } from "@/actions/mail";
+import { inboxPage } from "@/actions/mail";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { LinkButton } from "@/components/ui/button";
 import { MailboxConfigForm } from "@/components/mailbox-config-form";
 import { EmailInbox } from "@/components/email-inbox";
-import { EmailCompose } from "@/components/email-compose";
+import { SignaturesManager } from "@/components/signatures-manager";
 
 export const dynamic = "force-dynamic";
 
 export default async function CorreosPage() {
   const user = await requireUser();
-  const mailbox = await prisma.mailbox.findUnique({
-    where: { userId: user.id },
-  });
+  const [mailbox, signatures] = await Promise.all([
+    prisma.mailbox.findUnique({
+      where: { userId: user.id },
+    }),
+    prisma.signature.findMany({
+      where: { userId: user.id },
+      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+    }),
+  ]);
 
-  let messages: Awaited<ReturnType<typeof inboxPreview>> = [];
+  let inbox: Awaited<ReturnType<typeof inboxPage>> = {
+    messages: [],
+    total: 0,
+    page: 1,
+    limit: 100,
+  };
   let inboxError: string | null = null;
 
   if (mailbox) {
     try {
-      messages = await inboxPreview(mailbox.id, 100);
+      inbox = await inboxPage(mailbox.id, 1, 100);
     } catch (e) {
       console.error("Error leyendo buzón:", e);
       inboxError =
@@ -58,7 +70,7 @@ export default async function CorreosPage() {
             Bandeja de entrada (IMAP)
           </p>
         </div>
-        <EmailCompose triggerLabel="+ Nuevo correo" />
+        <LinkButton href="/correos/new">+ Nuevo correo</LinkButton>
       </div>
 
       {inboxError ? (
@@ -68,8 +80,36 @@ export default async function CorreosPage() {
       ) : null}
 
       <Card className="overflow-hidden p-0">
-        <EmailInbox mailboxId={mailbox.id} initialMessages={messages} />
+        <EmailInbox
+          mailboxId={mailbox.id}
+          initialMessages={inbox.messages}
+          initialTotal={inbox.total}
+          initialPage={1}
+          signature={mailbox.signature}
+          savedSignatures={signatures.map((s) => ({
+            id: s.id,
+            name: s.name,
+            content: s.content,
+            isDefault: s.isDefault,
+          }))}
+        />
       </Card>
+
+      <details className="rounded-lg border border-gray-200 bg-white">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          Firmas guardadas
+        </summary>
+        <div className="px-5 py-4">
+          <SignaturesManager
+            initial={signatures.map((s) => ({
+              id: s.id,
+              name: s.name,
+              content: s.content,
+              isDefault: s.isDefault,
+            }))}
+          />
+        </div>
+      </details>
 
       <details className="rounded-lg border border-gray-200 bg-white">
         <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-gray-700 hover:bg-gray-50">

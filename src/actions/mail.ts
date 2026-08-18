@@ -6,12 +6,17 @@ import { prisma } from "@/lib/db";
 import { mailboxFormSchema, sendEmailSchema } from "@/lib/definitions";
 import {
   listInbox,
+  listInboxPage,
   readMessage,
   sendMail,
+  toggleFlagged,
   type InboxMessage,
+  type InboxPage,
   type ReadMessage,
 } from "@/lib/mail";
 import { emitN8n } from "@/lib/n8n";
+import { parseEmails } from "@/lib/emails";
+import { sanitizeSignatureHtml } from "@/lib/sanitize";
 
 export type MailActionState = { error?: string; ok?: boolean } | undefined;
 
@@ -86,12 +91,31 @@ export async function deleteMailbox(): Promise<MailActionState> {
   return { ok: true };
 }
 
-function parseAddresses(value?: string): string[] {
-  if (!value) return [];
+function htmlToText(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<\/blockquote>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function escapeHtml(value: string): string {
   return value
-    .split(/[\s,;]+/)
-    .map((v) => v.trim().toLowerCase())
-    .filter((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 async function markLeadsContactado(recipients: string[]) {
@@ -101,7 +125,7 @@ async function markLeadsContactado(recipients: string[]) {
     select: { id: true, name: true, email: true },
   });
   for (const lead of leads) {
-    const leadEmails = parseAddresses(lead.email ?? undefined);
+    const leadEmails = parseEmails(lead.email).map((e) => e.toLowerCase());
     if (leadEmails.some((e) => recipients.includes(e))) {
       const updated = await prisma.lead.update({
         where: { id: lead.id },
@@ -133,6 +157,7 @@ export async function sendEmail(
     bcc: formData.get("bcc"),
     subject: formData.get("subject"),
     message: formData.get("message"),
+    signature: formData.get("signature"),
     inReplyTo: formData.get("inReplyTo"),
     references: formData.get("references"),
   });
@@ -141,10 +166,14 @@ export async function sendEmail(
   }
 
   const data = parsed.data;
-  const signature = mailbox.signature?.trim();
-  const body = signature
-    ? `${data.message.replace(/\s+$/, "")}\n\n${signature}`
+  const signature = (data.signature ?? mailbox.signature ?? "").trim();
+  const sigHtml = /<[a-z!][^>]*>/i.test(signature)
+    ? sanitizeSignatureHtml(signature)
+    : escapeHtml(signature).replace(/\n/g, "<br/>");
+  const html = signature
+    ? `${data.message.replace(/\s+$/, "")}<br/><br/>${sigHtml}`
     : data.message;
+  const text = htmlToText(html);
 
   const files = formData
     .getAll("attachments")
@@ -163,7 +192,8 @@ export async function sendEmail(
       cc: data.cc,
       bcc: data.bcc,
       subject: data.subject,
-      text: body,
+      text,
+      html,
       attachments,
       inReplyTo: data.inReplyTo,
       references: data.references,
@@ -174,10 +204,10 @@ export async function sendEmail(
   }
 
   const recipients = [
-    ...parseAddresses(data.to),
-    ...parseAddresses(data.cc),
-    ...parseAddresses(data.bcc),
-  ];
+    ...parseEmails(data.to),
+    ...parseEmails(data.cc),
+    ...parseEmails(data.bcc),
+  ].map((e) => e.toLowerCase());
   await markLeadsContactado(recipients);
 
   return { ok: true };
@@ -207,14 +237,42 @@ export async function refreshInbox(
   return listInbox(mailbox, limit);
 }
 
-export async function inboxPreview(
+export async function inboxPage(
   mailboxId: string,
-  limit = 100
-): Promise<Awaited<ReturnType<typeof listInbox>>> {
+  page: number,
+  limit = 30
+): Promise<InboxPage> {
   const user = await requireUser();
   const mailbox = await prisma.mailbox.findFirst({
     where: { id: mailboxId, userId: user.id },
   });
-  if (!mailbox) return [];
-  return listInbox(mailbox, limit);
+  if (!mailbox) return { messages: [], total: 0, page, limit };
+  return listInboxPage(mailbox, page, limit);
+}
+
+export async function inboxPreview(
+  mailboxId: string,
+  limit = 100
+): Promise<InboxMessage[]> {
+  const page = await inboxPage(mailboxId, 1, limit);
+  return page.messages;
+}
+
+export async function toggleImportant(
+  mailboxId: string,
+  uid: number,
+  flagged: boolean
+): Promise<{ ok: boolean }> {
+  const user = await requireUser();
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { id: mailboxId, userId: user.id },
+  });
+  if (!mailbox) return { ok: false };
+  try {
+    await toggleFlagged(mailbox, uid, flagged);
+    return { ok: true };
+  } catch (e) {
+    console.error("Error marcando importante:", e);
+    return { ok: false };
+  }
 }

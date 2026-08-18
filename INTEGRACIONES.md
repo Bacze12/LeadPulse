@@ -145,6 +145,9 @@ Cada vez que ocurre un evento, el CRM hace `POST` a esa URL con:
 | Tareas | `task.created` | Se crea una tarea/follow-up |
 | Tareas | `task.completed` | Se completa una tarea |
 | Tareas | `task.deleted` | Se elimina una tarea |
+| Proveedores | `provider.created` | Se crea un proveedor |
+| Proveedores | `provider.updated` | Se edita un proveedor |
+| Proveedores | `provider.deleted` | Se elimina un proveedor |
 
 **En n8n:** un nodo **Webhook** (ruta `crm-events`) con "Respond" desactivado recibe estos eventos y puede disparar el flujo que quieras.
 
@@ -158,6 +161,28 @@ Cada vez que ocurre un evento, el CRM hace `POST` a esa URL con:
 - **Revocar** una clave la inutiliza de inmediato (no se borra: queda en la lista *Revocadas*).
 - Autenticación: cada petición envía `x-api-key: <clave>`. Vale el `N8N_INBOUND_SECRET` de `.env` **o** cualquier API key activa.
 - Código: `src/lib/api-auth.ts`, `src/actions/api-keys.ts`, `src/components/api-keys-panel.tsx`.
+
+### 1.5 Proveedores (API de lectura y escritura)
+
+| Dato | Valor |
+| --- | --- |
+| Leer | `GET /api/providers?q=&status=&category=&page=&limit=` → `{ total, page, limit, providers }` |
+| Escribir | `POST /api/providers` → `{ action: "upsert" \| "create" \| "update" \| "delete", ...campos }` |
+| Auth | Header `x-api-key: <clave>` (igual que el resto de la API) |
+
+Campos de un proveedor: `id`, `name`, `rut`, `contactName`, `email`, `phone`, `category`, `website`, `address`, `notes`, `status` (`ACTIVO`/`INACTIVO`).
+
+```bash
+# Crear o actualizar (upsert por email o rut)
+curl -X POST http://localhost:3001/api/providers \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: crm_tu_clave" \
+  -d '{"name":"Proveedor Seguridad SpA","rut":"76.123.456-7","contactName":"Juan","email":"contacto@proveedor.cl","category":"Cámaras"}'
+```
+
+Eventos emitidos: `provider.created`, `provider.updated`, `provider.deleted`.
+
+> Código: `src/app/api/providers/route.ts`, `src/actions/providers.ts`, página `src/app/(dashboard)/proveedores/page.tsx`.
 
 ---
 
@@ -225,6 +250,10 @@ Resumen con métricas en vivo:
 1. n8n lee bandejas de Titan/email y escribe leads con `messageId`, `emails[]` y `website`.
 2. **En el CRM (interfaz)**: cada usuario conecta su casilla en `/correos`, ve el historial de mensajes por cliente (tarjeta "Correos del lead") y responde manualmente desde la ficha.
 3. **En n8n (motor de automatización)**: con nodos de email (IMAP/SMTP de Titan) hace envíos automáticos en segundo plano (bienvenidas, secuencias outbound, detectar respuestas y pasar el lead a `CONTACTADO`).
+
+### Flujo F — Gestión de proveedores
+1. n8n u otro sistema escribe proveedores con `POST /api/providers` (upsert por email o rut) y puede leer el catálogo con `GET /api/providers`.
+2. El CRM emite `provider.created` / `provider.updated` / `provider.deleted` para que n8n sincronice compras, precios o pedidos.
 
 ---
 

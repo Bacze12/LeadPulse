@@ -1,5 +1,4 @@
 import { ImapFlow } from "imapflow";
-import { simpleParser, type AddressObject, type EmailAddress } from "mailparser";
 import nodemailer from "nodemailer";
 
 export type MailboxLike = {
@@ -20,7 +19,15 @@ export type InboxMessage = {
   subject: string;
   date: Date;
   seen: boolean;
+  flagged: boolean;
   snippet: string;
+};
+
+export type EmailAttachment = {
+  filename: string;
+  contentType: string;
+  size: number;
+  partId: string;
 };
 
 export type ReadMessage = {
@@ -32,9 +39,18 @@ export type ReadMessage = {
   date: Date;
   text: string;
   html: string | null;
+  flagged: boolean;
+  attachments: EmailAttachment[];
   messageId: string | null;
   inReplyTo: string | null;
   references: string | null;
+};
+
+export type InboxPage = {
+  messages: InboxMessage[];
+  total: number;
+  page: number;
+  limit: number;
 };
 
 function imapConfig(mailbox: MailboxLike) {
@@ -55,39 +71,135 @@ function addressLabel(addr?: { name?: string; address?: string }): string {
   return addr.address ?? "Desconocido";
 }
 
-function firstAddress(
-  addr: EmailAddress[] | undefined
-): EmailAddress | undefined {
-  if (!addr || addr.length === 0) return undefined;
-  return addr[0];
-}
+type ImapBodyPart = {
+  type?: string;
+  part?: string;
+  size?: number;
+  id?: string;
+  disposition?: string | null;
+  parameters?: Record<string, string>;
+  dispositionParameters?: Record<string, string>;
+  childNodes?: ImapBodyPart[];
+};
 
-function mailAddressList(
-  addr: AddressObject | AddressObject[] | undefined
-): EmailAddress[] | undefined {
-  if (!addr) return undefined;
-  if (Array.isArray(addr)) {
-    return addr.flatMap((a) => a.value ?? []);
+function walkBodyParts(node: ImapBodyPart | undefined, out: ImapBodyPart[]) {
+  if (!node) return;
+  if (node.childNodes) {
+    for (const child of node.childNodes) walkBodyParts(child, out);
+  } else if (node.type) {
+    out.push(node);
   }
-  return addr.value ?? [];
 }
 
-async function sourceToText(source: unknown): Promise<string> {
-  if (typeof source === "string") return source;
-  if (Buffer.isBuffer(source)) return source.toString("utf8");
+function partParam(
+  params: Record<string, string> | undefined,
+  keys: string[]
+): string | undefined {
+  if (!params) return undefined;
+  for (const key of keys) {
+    const value = params[key];
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function isAttachmentPart(node: ImapBodyPart): boolean {
+  const filename = partParam(
+    node.dispositionParameters ?? node.parameters,
+    ["filename", "name"]
+  );
+  if (!filename || !node.part) return false;
+  const ct = (node.type ?? "").toLowerCase();
+  if (node.disposition === "attachment") return true;
+  if (ct === "text/plain" || ct === "text/html") return false;
+  if (ct.startsWith("image/")) return false;
+  if (ct.startsWith("multipart/") || ct === "message/rfc822") return false;
+  return true;
+}
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseHeaderBuffer(
+  buf: Buffer,
+  names: string[]
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const wanted = new Set(names.map((n) => n.toLowerCase()));
+  let currentKey: string | null = null;
+  let currentValue = "";
+  for (const line of buf.toString("utf8").split(/\r?\n/)) {
+    if (!line || line === "") continue;
+    if (/^[\t ]/.test(line)) {
+      if (currentKey) currentValue += " " + line.trim();
+      continue;
+    }
+    const idx = line.indexOf(":");
+    if (idx === -1) continue;
+    const key = line.slice(0, idx).trim().toLowerCase();
+    if (currentKey) out.set(currentKey, currentValue);
+    currentKey = wanted.has(key) ? key : null;
+    currentValue = wanted.has(key) ? line.slice(idx + 1).trim() : "";
+  }
+  if (currentKey) out.set(currentKey, currentValue);
+  return out;
+}
+
+async function collectStream(
+  stream: AsyncIterable<Buffer | Uint8Array | string>
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  for await (const chunk of source as AsyncIterable<
-    Buffer | Uint8Array | string
-  >) {
+  for await (const chunk of stream) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
 }
 
-export async function listInbox(
-  mailbox: MailboxLike,
-  limit = 30
+async function fetchRange(
+  client: ImapFlow,
+  startSeq: number,
+  endSeq: number
 ): Promise<InboxMessage[]> {
+  const messages: InboxMessage[] = [];
+  for await (const msg of client.fetch(`${startSeq}:${endSeq}`, {
+    uid: true,
+    envelope: true,
+    internalDate: true,
+    flags: true,
+  })) {
+    const from = msg.envelope?.from?.[0];
+    const to = msg.envelope?.to?.[0];
+    messages.push({
+      uid: msg.uid,
+      from: addressLabel(from),
+      fromAddress: from?.address ?? "",
+      toAddress: to?.address ?? "",
+      subject: msg.envelope?.subject ?? "(sin asunto)",
+      date: new Date(msg.internalDate ?? Date.now()),
+      seen: msg.flags?.has("\\Seen") ?? false,
+      flagged: msg.flags?.has("\\Flagged") ?? false,
+      snippet: "",
+    });
+  }
+  messages.sort((a, b) => b.date.getTime() - a.date.getTime());
+  return messages;
+}
+
+export async function listInboxPage(
+  mailbox: MailboxLike,
+  page = 1,
+  limit = 30
+): Promise<InboxPage> {
   const client = new ImapFlow(imapConfig(mailbox));
   try {
     await client.connect();
@@ -95,29 +207,44 @@ export async function listInbox(
     try {
       const status = await client.status("INBOX", { messages: true });
       const total = status.messages ?? 0;
-      const start = Math.max(1, total - limit + 1);
-      const messages: InboxMessage[] = [];
-      for await (const msg of client.fetch(`${start}:*`, {
-        uid: true,
-        envelope: true,
-        internalDate: true,
-        flags: true,
-      })) {
-        const from = msg.envelope?.from?.[0];
-        const to = msg.envelope?.to?.[0];
-        messages.push({
-          uid: msg.uid,
-          from: addressLabel(from),
-          fromAddress: from?.address ?? "",
-          toAddress: to?.address ?? "",
-          subject: msg.envelope?.subject ?? "(sin asunto)",
-          date: new Date(msg.internalDate ?? Date.now()),
-          seen: msg.flags?.has("\\Seen") ?? false,
-          snippet: "",
-        });
+      const startSeq = Math.max(1, total - page * limit + 1);
+      const endSeq = Math.max(0, total - (page - 1) * limit);
+      let messages: InboxMessage[] = [];
+      if (endSeq >= startSeq) {
+        messages = await fetchRange(client, startSeq, endSeq);
       }
-      messages.sort((a, b) => b.date.getTime() - a.date.getTime());
-      return messages.slice(0, limit);
+      return { messages, total, page, limit };
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+export async function listInbox(
+  mailbox: MailboxLike,
+  limit = 30
+): Promise<InboxMessage[]> {
+  const { messages } = await listInboxPage(mailbox, 1, limit);
+  return messages;
+}
+
+export async function toggleFlagged(
+  mailbox: MailboxLike,
+  uid: number,
+  flagged: boolean
+): Promise<void> {
+  const client = new ImapFlow(imapConfig(mailbox));
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      if (flagged) {
+        await client.messageFlagsAdd(String(uid), ["\\Flagged"], { uid: true });
+      } else {
+        await client.messageFlagsRemove(String(uid), ["\\Flagged"], { uid: true });
+      }
     } finally {
       lock.release();
     }
@@ -137,30 +264,144 @@ export async function readMessage(
     try {
       const msg = await client.fetchOne(String(uid), {
         uid: true,
-        source: true,
+        envelope: true,
+        flags: true,
+        bodyStructure: true,
+        headers: ["message-id", "in-reply-to", "references"],
       });
-      if (!msg || !msg.source) return null;
-      const raw = await sourceToText(msg.source);
-      const parsed = await simpleParser(raw);
-      const from = firstAddress(mailAddressList(parsed.from));
-      const to = firstAddress(mailAddressList(parsed.to));
-      const references = parsed.references
-        ? Array.isArray(parsed.references)
-          ? parsed.references.join(" ")
-          : parsed.references
-        : null;
+      if (!msg || !msg.bodyStructure) return null;
+
+      const parts: ImapBodyPart[] = [];
+      walkBodyParts(msg.bodyStructure, parts);
+
+      const attachments: EmailAttachment[] = parts
+        .filter(isAttachmentPart)
+        .map((p) => ({
+          filename:
+            partParam(p.dispositionParameters ?? p.parameters, [
+              "filename",
+              "name",
+            ]) ?? `adjunto-${p.part}`,
+          contentType: p.type || "application/octet-stream",
+          size: p.size ?? 0,
+          partId: p.part as string,
+        }));
+
+      let text = "";
+      let html: string | null = null;
+
+      const plainParts = parts.filter(
+        (p) => p.type === "text/plain" && !!p.part
+      );
+      const htmlParts = parts.filter(
+        (p) => p.type === "text/html" && !!p.part
+      );
+
+      for (const part of plainParts) {
+        try {
+          const res = await client.download(String(uid), part.part as string, {
+            uid: true,
+          });
+          text += (await collectStream(res.content)).toString("utf8") + "\n";
+        } catch {
+          // ignore unreadable text parts
+        }
+      }
+
+      if (htmlParts.length > 0) {
+        const htmlChunks: string[] = [];
+        for (const part of htmlParts) {
+          try {
+            const res = await client.download(String(uid), part.part as string, {
+              uid: true,
+            });
+            htmlChunks.push(
+              (await collectStream(res.content)).toString("utf8")
+            );
+          } catch {
+            // ignore unreadable html parts
+          }
+        }
+        html = htmlChunks.join("\n") || null;
+      }
+
+      if (html) {
+        const imageParts = parts.filter(
+          (p) => p.type?.startsWith("image/") && !!p.id && !!p.part
+        );
+        const cidMap = new Map<string, string>();
+        for (const img of imageParts) {
+          try {
+            const res = await client.download(String(uid), img.part as string, {
+              uid: true,
+            });
+            const data = await collectStream(res.content);
+            const cid = img.id?.replace(/^<|>$/g, "") ?? "";
+            if (cid) cidMap.set(cid, `data:${img.type};base64,${data.toString("base64")}`);
+          } catch {
+            // ignore unreadable inline images
+          }
+        }
+        if (cidMap.size > 0) {
+          html = html.replace(/cid:([^"'\s>]+)/gi, (m, cidRaw: string) => {
+            const cid = String(cidRaw).replace(/^<|>$/g, "");
+            return cidMap.get(cid) ?? m;
+          });
+        }
+        if (plainParts.length === 0) {
+          text = stripHtml(html);
+        }
+      }
+
+      const from = msg.envelope?.from?.[0];
+      const to = msg.envelope?.to?.[0];
+      const headerMap = msg.headers
+        ? parseHeaderBuffer(msg.headers, ["message-id", "in-reply-to", "references"])
+        : new Map<string, string>();
+      const header = (name: string): string | null =>
+        headerMap.get(name.toLowerCase()) ?? null;
+
       return {
         uid,
         from: addressLabel(from),
         fromAddress: from?.address ?? "",
         to: to?.address ?? "",
-        subject: parsed.subject ?? "(sin asunto)",
-        date: parsed.date ?? new Date(),
-        text: parsed.text ?? "",
-        html: parsed.html || null,
-        messageId: parsed.messageId || null,
-        inReplyTo: parsed.inReplyTo || null,
-        references,
+        subject: msg.envelope?.subject ?? "(sin asunto)",
+        date: new Date(msg.internalDate ?? Date.now()),
+        text: text.trim(),
+        html,
+        flagged: msg.flags?.has("\\Flagged") ?? false,
+        attachments,
+        messageId: header("message-id"),
+        inReplyTo: header("in-reply-to"),
+        references: header("references"),
+      };
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+export async function downloadAttachment(
+  mailbox: MailboxLike,
+  uid: number,
+  partId: string
+): Promise<{ filename: string; contentType: string; content: Buffer } | null> {
+  const client = new ImapFlow(imapConfig(mailbox));
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock("INBOX");
+    try {
+      const res = await client.download(String(uid), partId, { uid: true });
+      const content = await collectStream(res.content);
+      return {
+        filename:
+          res.meta.filename ||
+          `adjunto-${partId}`.replace(/[\\/:*?"<>|]/g, "_"),
+        contentType: res.meta.contentType || "application/octet-stream",
+        content,
       };
     } finally {
       lock.release();
@@ -201,7 +442,7 @@ export async function sendMail(
       bcc: opts.bcc,
       subject: opts.subject,
       text: opts.text,
-      html: opts.html,
+      html: opts.html ?? undefined,
       attachments: opts.attachments,
       inReplyTo: opts.inReplyTo ?? undefined,
       references: opts.references ?? undefined,

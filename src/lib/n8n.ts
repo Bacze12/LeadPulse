@@ -2,7 +2,7 @@ import "server-only";
 
 export type N8nEvent = {
   event: string;
-  entity: "lead" | "visit" | "quote" | "task";
+  entity: "lead" | "visit" | "quote" | "task" | "provider";
   data: Record<string, unknown>;
 };
 

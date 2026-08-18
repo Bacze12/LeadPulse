@@ -12,9 +12,15 @@ export default async function NewEmailPage({
   searchParams: Promise<{ to?: string; subject?: string }>;
 }) {
   const user = await requireUser();
-  const mailbox = await prisma.mailbox.findUnique({
-    where: { userId: user.id },
-  });
+  const [mailbox, signatures] = await Promise.all([
+    prisma.mailbox.findUnique({
+      where: { userId: user.id },
+    }),
+    prisma.signature.findMany({
+      where: { userId: user.id },
+      orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+    }),
+  ]);
   const { to, subject } = await searchParams;
 
   if (!mailbox) {
@@ -49,6 +55,13 @@ export default async function NewEmailPage({
             defaultOpen
             defaultTo={to}
             defaultSubject={subject}
+            signature={mailbox.signature ?? undefined}
+            savedSignatures={signatures.map((s) => ({
+              id: s.id,
+              name: s.name,
+              content: s.content,
+              isDefault: s.isDefault,
+            }))}
             triggerLabel="Nuevo correo"
           />
         </div>

@@ -13,6 +13,8 @@ import { InteractionForm } from "@/components/interaction-form";
 import { DeleteInteractionButton } from "@/components/delete-interaction-button";
 import { TaskItem } from "@/components/task-item";
 import { EmailList } from "@/components/email-list";
+import { EmailLink } from "@/components/email-link";
+import { ComposeEmailButton } from "@/components/compose-email-button";
 import { listInbox, type InboxMessage } from "@/lib/mail";
 import {
   LEAD_STATUS_LABELS,
@@ -103,7 +105,6 @@ export default async function LeadDetailPage({
   value: string | null | undefined;
   href?: string;
   email?: boolean;
-  to?: string;
 };
 
 const contactRows: ContactRow[] = [
@@ -112,7 +113,6 @@ const contactRows: ContactRow[] = [
       label: "Email",
       value: lead.email,
       email: true,
-      to: lead.email ? lead.email.split(/[\s,;]+/)[0] : undefined,
     },
     { label: "Teléfono", value: lead.phone },
     { label: "Sitio web", value: lead.website, href: lead.website ?? undefined },
@@ -193,13 +193,11 @@ const contactRows: ContactRow[] = [
               <div key={row.label} className="flex justify-between gap-4 py-3">
                 <dt className="text-sm text-gray-500">{row.label}</dt>
                 <dd className="text-sm font-medium text-gray-900">
-                  {row.email && row.to ? (
-                    <Link
-                      href={`/correos/new?to=${encodeURIComponent(row.to)}`}
+                  {row.email ? (
+                    <EmailLink
+                      value={row.value}
                       className="text-indigo-600 hover:text-indigo-800 hover:underline"
-                    >
-                      {row.value ?? "—"}
-                    </Link>
+                    />
                   ) : row.href ? (
                     <a
                       href={row.href}
@@ -301,12 +299,7 @@ const contactRows: ContactRow[] = [
             }
             action={
               mailbox ? (
-                <LinkButton
-                  href={`/correos/new?to=${encodeURIComponent(Array.from(leadEmails)[0])}`}
-                  variant="secondary"
-                >
-                  Enviar correo
-                </LinkButton>
+                <ComposeEmailButton emails={Array.from(leadEmails)} />
               ) : undefined
             }
           />
@@ -320,7 +313,11 @@ const contactRows: ContactRow[] = [
               No hay correos asociados a este lead aún.
             </p>
           ) : (
-            <EmailList mailboxId={mailbox.id} messages={relatedEmails} />
+            <EmailList
+              mailboxId={mailbox.id}
+              messages={relatedEmails}
+              signature={mailbox.signature}
+            />
           )}
         </Card>
       ) : null}

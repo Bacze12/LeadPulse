@@ -6,17 +6,37 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LinkButton } from "@/components/ui/button";
 import { AutoRefresh } from "@/components/auto-refresh";
+import { EmailLink } from "@/components/email-link";
 import { LEAD_STATUS_LABELS, LEAD_STATUS_STYLES } from "@/lib/constants";
 import { formatDate } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
-export default async function LeadsPage() {
+const PAGE_SIZE = 25;
+
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
   await requireUser();
 
-  const leads = await prisma.lead.findMany({
-    orderBy: { createdAt: "desc" },
-  });
+  const sp = await searchParams;
+  const page = Math.max(1, Number(sp.page) || 1);
+  const skip = (page - 1) * PAGE_SIZE;
+
+  const [leads, total] = await Promise.all([
+    prisma.lead.findMany({
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: PAGE_SIZE,
+    }),
+    prisma.lead.count(),
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const start = total === 0 ? 0 : skip + 1;
+  const end = Math.min(skip + PAGE_SIZE, total);
 
   return (
     <div className="space-y-6">
@@ -33,7 +53,7 @@ export default async function LeadsPage() {
         </div>
       </div>
 
-      {leads.length === 0 ? (
+      {total === 0 ? (
         <EmptyState
           title="Aún no hay leads"
           description="Crea tu primer lead manualmente o deja que n8n lo haga a través del webhook."
@@ -77,13 +97,7 @@ export default async function LeadsPage() {
                     <td className="px-5 py-4">
                       <p className="text-sm text-gray-700">{lead.phone ?? "—"}</p>
                       {lead.email ? (
-                        <Link
-                          href={`/correos/new?to=${encodeURIComponent(lead.email.split(/[\s,;]+/)[0])}`}
-                          className="text-xs text-indigo-600 hover:underline"
-                          title="Enviar correo a este lead"
-                        >
-                          {lead.email}
-                        </Link>
+                        <EmailLink value={lead.email} className="text-xs text-indigo-600 hover:underline" />
                       ) : (
                         <p className="text-xs text-gray-500" />
                       )}
@@ -109,6 +123,48 @@ export default async function LeadsPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
+            <p className="text-xs text-gray-500">
+              Mostrando {start}–{end} de {total} leads · Página {page} de{" "}
+              {totalPages}
+            </p>
+            <div className="flex items-center gap-2">
+              {page > 1 ? (
+                <LinkButton
+                  href={`/leads?page=${page - 1}`}
+                  variant="secondary"
+                >
+                  ← Anterior
+                </LinkButton>
+              ) : null}
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                .map((p, idx, arr) => (
+                  <span key={p} className="flex items-center gap-2">
+                    {idx > 0 && arr[idx - 1] !== p - 1 ? (
+                      <span className="text-xs text-gray-400">…</span>
+                    ) : null}
+                    {p === page ? (
+                      <span className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white">
+                        {p}
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/leads?page=${p}`}
+                        className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
+                      >
+                        {p}
+                      </Link>
+                    )}
+                  </span>
+                ))}
+              {page < totalPages ? (
+                <LinkButton href={`/leads?page=${page + 1}`} variant="secondary">
+                  Siguiente →
+                </LinkButton>
+              ) : null}
+            </div>
           </div>
         </Card>
       )}

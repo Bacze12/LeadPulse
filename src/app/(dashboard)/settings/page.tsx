@@ -18,6 +18,16 @@ const endpoints = [
     path: "/api/leads",
     desc: "Lista leads con filtros: q, email, phone, status, tag, assignedTo, page, limit.",
   },
+  {
+    method: "GET",
+    path: "/api/providers",
+    desc: "Lista proveedores con filtros: q, status, category, page, limit.",
+  },
+  {
+    method: "POST",
+    path: "/api/providers",
+    desc: "Crea, actualiza o elimina proveedores (upsert por email o rut).",
+  },
 ];
 
 export default async function SettingsPage() {

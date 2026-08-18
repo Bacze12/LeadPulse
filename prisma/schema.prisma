@@ -74,6 +74,7 @@ model User {
   assignedTasks  Task[]        @relation("TaskAssignedTo")
   interactions   Interaction[] @relation("InteractionCreatedBy")
   mailbox        Mailbox?
+  signatures     Signature[]
 
   @@map("users")
 }
@@ -95,6 +96,19 @@ model Mailbox {
   @@map("mailboxes")
 }
 
+model Signature {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  content   String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("signatures")
+}
+
 model ApiKey {
   id          String    @id @default(cuid())
   name        String
@@ -106,6 +120,24 @@ model ApiKey {
   revokedAt   DateTime?
 
   @@map("api_keys")
+}
+
+model Provider {
+  id          String   @id @default(cuid())
+  name        String
+  rut         String?
+  contactName String?
+  email       String?
+  phone       String?
+  category    String?
+  website     String?
+  address     String?
+  notes       String?
+  status      String   @default("ACTIVO")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("providers")
 }
 
 model Lead {

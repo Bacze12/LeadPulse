@@ -145,3 +145,15 @@ export const TITAN_DEFAULTS = {
   smtpHost: "smtp.titan.email",
   smtpPort: 465,
 };
+
+export const PROVIDER_STATUSES = ["ACTIVO", "INACTIVO"] as const;
+
+export const PROVIDER_STATUS_LABELS: Record<string, string> = {
+  ACTIVO: "Activo",
+  INACTIVO: "Inactivo",
+};
+
+export const PROVIDER_STATUS_STYLES: Record<string, string> = {
+  ACTIVO: "bg-emerald-100 text-emerald-800",
+  INACTIVO: "bg-gray-200 text-gray-700",
+};

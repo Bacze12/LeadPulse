@@ -3,15 +3,19 @@
 import { useState } from "react";
 import { readMessageAction } from "@/actions/mail";
 import { EmailCompose } from "@/components/email-compose";
+import { EmailHtml } from "@/components/email-html";
+import { MarkdownText } from "@/components/markdown-text";
 import { formatDate } from "@/lib/format";
 import type { InboxMessage } from "@/lib/mail";
 
 export function EmailList({
   mailboxId,
   messages,
+  signature,
 }: {
   mailboxId: string;
   messages: InboxMessage[];
+  signature?: string | null;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof readMessageAction>> | null>(null);
@@ -96,7 +100,36 @@ export function EmailList({
                     <p className="mb-3 text-xs text-gray-400">
                       {formatDate(detail.date)}
                     </p>
-                    <div className="whitespace-pre-wrap">{detail.text}</div>
+                    {detail.attachments.length > 0 ? (
+                      <div className="mb-3 space-y-2">
+                        {detail.attachments.map((a) => (
+                          <a
+                            key={a.partId}
+                            href={`/api/mail/attachment?uid=${detail.uid}&partId=${encodeURIComponent(a.partId)}`}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-700 hover:border-indigo-300 hover:text-indigo-700"
+                            title={`Descargar ${a.filename}`}
+                          >
+                            <span className="min-w-0 truncate">
+                              📎 {a.filename}
+                            </span>
+                            <span className="shrink-0 text-xs text-gray-400">
+                              {a.size > 0
+                                ? `${(a.size / 1024).toFixed(1)} KB`
+                                : ""}{" "}
+                              ⬇
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
+                    {detail.html ? (
+                      <EmailHtml html={detail.html} height="48vh" />
+                    ) : (
+                      <MarkdownText
+                        text={detail.text}
+                        className="whitespace-pre-wrap text-sm text-gray-800"
+                      />
+                    )}
                   </div>
                   <EmailCompose
                     reply={{
@@ -106,6 +139,7 @@ export function EmailList({
                       text: detail.text,
                     }}
                     defaultTo={detail.fromAddress}
+                    signature={signature ?? undefined}
                   />
                 </div>
               ) : (

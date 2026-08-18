@@ -1,5 +1,9 @@
 import * as z from "zod";
-import { INTERACTION_TYPES, TASK_ACTION_TYPES } from "@/lib/constants";
+import {
+  INTERACTION_TYPES,
+  PROVIDER_STATUSES,
+  TASK_ACTION_TYPES,
+} from "@/lib/constants";
 
 const optionalString = z.preprocess(
   (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
@@ -81,7 +85,7 @@ export type TaskFormData = z.infer<typeof taskFormSchema>;
 export const mailboxFormSchema = z.object({
   name: optionalString,
   email: z.string().email("Ingresa el correo de la casilla"),
-  password: z.string().min(1, "La contraseña es requerida"),
+  password: optionalString,
   signature: optionalString,
   imapHost: z.string().min(1).default("imap.titan.email"),
   imapPort: z.coerce.number().int().positive().default(993),
@@ -95,8 +99,24 @@ export const sendEmailSchema = z.object({
   bcc: optionalString,
   subject: z.string().min(1, "El asunto es requerido"),
   message: z.string().min(1, "Escribe el mensaje"),
+  signature: optionalString,
   inReplyTo: optionalString,
   references: optionalString,
+});
+
+export const providerFormSchema = z.object({
+  name: z.string().min(1, "El nombre es requerido"),
+  rut: optionalString,
+  contactName: optionalString,
+  email: z
+    .union([z.string().email("Email inválido"), z.literal(""), z.undefined()])
+    .optional(),
+  phone: optionalString,
+  category: optionalString,
+  website: optionalString,
+  address: optionalString,
+  notes: optionalString,
+  status: z.enum(PROVIDER_STATUSES).default("ACTIVO"),
 });
 
 export type MailboxFormData = z.infer<typeof mailboxFormSchema>;
