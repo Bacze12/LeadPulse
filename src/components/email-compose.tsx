@@ -204,12 +204,8 @@ export function EmailCompose({
           ) : null}
         </div>
 
-        {reply ? (
-          <>
-            <input type="hidden" name="inReplyTo" value={reply.messageId ?? ""} />
-            <input type="hidden" name="references" value={reply.references ?? ""} />
-          </>
-        ) : null}
+        <input type="hidden" name="inReplyTo" value={reply?.messageId ?? ""} />
+        <input type="hidden" name="references" value={reply?.references ?? ""} />
 
         <div className="flex gap-2">
           <Button type="submit" disabled={pending}>

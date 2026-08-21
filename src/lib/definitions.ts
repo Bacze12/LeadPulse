@@ -6,7 +6,10 @@ import {
 } from "@/lib/constants";
 
 const optionalString = z.preprocess(
-  (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+  (v) =>
+    v === null || v === undefined || (typeof v === "string" && v.trim() === "")
+      ? undefined
+      : v,
   z.string().optional()
 );
 

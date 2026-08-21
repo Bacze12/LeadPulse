@@ -48,7 +48,7 @@ export function MailboxConfigForm({ mailbox }: MailboxConfigFormProps) {
         </div>
         <div>
           <Label htmlFor="mb-password">Contraseña de la casilla *</Label>
-          <Input id="mb-password" name="password" type="password" defaultValue={mailbox ? undefined : ""} placeholder={mailbox ? "•••••••• (déjalo en blanco para mantener)" : "Clave de Titan"} />
+          <Input id="mb-password" name="password" type="password" autoComplete="new-password" defaultValue={mailbox ? undefined : ""} placeholder={mailbox ? "•••••••• (déjalo en blanco para mantener)" : "Clave de Titan"} />
           <p className="mt-1 text-xs text-gray-400">
             Se guarda en la base de datos y se usa solo para IMAP y SMTP de Titan.
           </p>
