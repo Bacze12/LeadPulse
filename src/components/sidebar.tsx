@@ -11,6 +11,12 @@ type SidebarUser = {
   role?: string;
 };
 
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ReactNode;
+};
+
 const navItems = [
   {
     href: "/dashboard",
@@ -75,6 +81,16 @@ const navItems = [
     ),
   },
   {
+    href: "/notificaciones",
+    label: "Notificaciones",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+    ),
+  },
+  {
     href: "/proveedores",
     label: "Proveedores",
     icon: (
@@ -124,11 +140,17 @@ const accountItems = [
   },
 ];
 
-export function Sidebar({ user }: { user: SidebarUser }) {
+export function Sidebar({
+  user,
+  unreadNotifications = 0,
+}: {
+  user: SidebarUser;
+  unreadNotifications?: number;
+}) {
   const pathname = usePathname();
   const isAdmin = user.role === "ADMIN";
 
-  const renderItem = (item: (typeof navItems)[number]) => {
+  const renderItem = (item: NavItem) => {
     const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
     return (
       <Link
@@ -143,6 +165,11 @@ export function Sidebar({ user }: { user: SidebarUser }) {
       >
         {item.icon}
         {item.label}
+        {item.href === "/notificaciones" && unreadNotifications > 0 ? (
+          <span className="ml-auto rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-semibold text-white">
+            {unreadNotifications > 99 ? "99+" : unreadNotifications}
+          </span>
+        ) : null}
       </Link>
     );
   };

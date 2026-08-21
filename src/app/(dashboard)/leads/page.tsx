@@ -1,42 +1,104 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
 import { prisma } from "@/lib/db";
+import { processDueScheduledEmails } from "@/actions/mail";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LinkButton } from "@/components/ui/button";
 import { AutoRefresh } from "@/components/auto-refresh";
-import { EmailLink } from "@/components/email-link";
-import { LEAD_STATUS_LABELS, LEAD_STATUS_STYLES } from "@/lib/constants";
+import { LeadsFilters } from "@/components/leads-filters";
+import { LeadsTable, type LeadRow } from "@/components/leads-table";
+import {
+  LEAD_STATUSES,
+  LEAD_STATUS_LABELS,
+  LEAD_STATUS_STYLES,
+} from "@/lib/constants";
+import type { LeadStatus } from "@/generated/prisma/enums";
 import { formatDate } from "@/lib/format";
+import { parseEmails } from "@/lib/emails";
 
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 25;
 
+function buildQuery(
+  params: Record<string, string | undefined>,
+  overrides: Record<string, string | undefined>
+): string {
+  const merged: Record<string, string> = {};
+  for (const [k, v] of Object.entries({ ...params, ...overrides })) {
+    if (v) merged[k] = v;
+  }
+  delete merged.page;
+  const qs = new URLSearchParams(merged).toString();
+  const pagePart = `page=${overrides.page ?? 1}`;
+  return qs ? `${qs}&${pagePart}` : pagePart;
+}
+
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ page?: string }>;
+  searchParams: Promise<{ page?: string; status?: string; assigned?: string }>;
 }) {
   await requireUser();
+
+  await processDueScheduledEmails().catch(() => {});
 
   const sp = await searchParams;
   const page = Math.max(1, Number(sp.page) || 1);
   const skip = (page - 1) * PAGE_SIZE;
 
-  const [leads, total] = await Promise.all([
+  const status =
+    sp.status && LEAD_STATUSES.includes(sp.status as (typeof LEAD_STATUSES)[number])
+      ? (sp.status as LeadStatus)
+      : undefined;
+  const assigned =
+    sp.assigned === "__none"
+      ? null
+      : sp.assigned && /^[a-z0-9]{10,}$/i.test(sp.assigned)
+        ? sp.assigned
+        : undefined;
+
+  const where = {
+    ...(status ? { status } : {}),
+    ...(sp.assigned === "__none"
+      ? { assignedToId: null }
+      : assigned
+        ? { assignedToId: assigned }
+        : {}),
+  };
+
+  const [leads, total, users] = await Promise.all([
     prisma.lead.findMany({
+      where,
       orderBy: { createdAt: "desc" },
       skip,
       take: PAGE_SIZE,
+      include: { assignedTo: { select: { id: true, name: true } } },
     }),
-    prisma.lead.count(),
+    prisma.lead.count({ where }),
+    prisma.user.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
   ]);
+
+  const rows: LeadRow[] = leads.map((lead) => ({
+    id: lead.id,
+    name: lead.name,
+    company: lead.company,
+    phone: lead.phone,
+    emails: parseEmails(lead.email),
+    statusLabel: LEAD_STATUS_LABELS[lead.status],
+    statusClass: LEAD_STATUS_STYLES[lead.status],
+    assignedName: lead.assignedTo?.name ?? null,
+    createdAtLabel: formatDate(lead.createdAt),
+  }));
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const start = total === 0 ? 0 : skip + 1;
   const end = Math.min(skip + PAGE_SIZE, total);
+  const filterParams = { status: status as string | undefined, assigned: sp.assigned };
 
   return (
     <div className="space-y-6">
@@ -53,77 +115,25 @@ export default async function LeadsPage({
         </div>
       </div>
 
+      <LeadsFilters
+        status={status}
+        assigned={sp.assigned}
+        users={users}
+      />
+
       {total === 0 ? (
         <EmptyState
-          title="Aún no hay leads"
-          description="Crea tu primer lead manualmente o deja que n8n lo haga a través del webhook."
+          title="No hay leads"
+          description={
+            status || sp.assigned
+              ? "Ningún lead coincide con los filtros seleccionados."
+              : "Crea tu primer lead manualmente o deja que n8n lo haga a través del webhook."
+          }
           action={<LinkButton href="/leads/new">+ Nuevo lead</LinkButton>}
         />
       ) : (
         <Card>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Lead
-                  </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Contacto
-                  </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Estado
-                  </th>
-                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    Creado
-                  </th>
-                  <th className="px-5 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 bg-white">
-                {leads.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-gray-50">
-                    <td className="px-5 py-4">
-                      <Link
-                        href={`/leads/${lead.id}`}
-                        className="text-sm font-medium text-gray-900 hover:text-indigo-600"
-                      >
-                        {lead.name}
-                      </Link>
-                      <p className="text-xs text-gray-500">
-                        {lead.company ?? "Sin empresa"}
-                      </p>
-                    </td>
-                    <td className="px-5 py-4">
-                      <p className="text-sm text-gray-700">{lead.phone ?? "—"}</p>
-                      {lead.email ? (
-                        <EmailLink value={lead.email} className="text-xs text-indigo-600 hover:underline" />
-                      ) : (
-                        <p className="text-xs text-gray-500" />
-                      )}
-                    </td>
-                    <td className="px-5 py-4">
-                      <Badge
-                        label={LEAD_STATUS_LABELS[lead.status]}
-                        className={LEAD_STATUS_STYLES[lead.status]}
-                      />
-                    </td>
-                    <td className="px-5 py-4 text-sm text-gray-500">
-                      {formatDate(lead.createdAt)}
-                    </td>
-                    <td className="px-5 py-4 text-right">
-                      <Link
-                        href={`/leads/${lead.id}`}
-                        className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
-                      >
-                        Ver →
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <LeadsTable rows={rows} />
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
             <p className="text-xs text-gray-500">
               Mostrando {start}–{end} de {total} leads · Página {page} de{" "}
@@ -132,7 +142,7 @@ export default async function LeadsPage({
             <div className="flex items-center gap-2">
               {page > 1 ? (
                 <LinkButton
-                  href={`/leads?page=${page - 1}`}
+                  href={`/leads?${buildQuery(filterParams, { page: String(page - 1) })}`}
                   variant="secondary"
                 >
                   ← Anterior
@@ -151,7 +161,7 @@ export default async function LeadsPage({
                       </span>
                     ) : (
                       <Link
-                        href={`/leads?page=${p}`}
+                        href={`/leads?${buildQuery(filterParams, { page: String(p) })}`}
                         className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-inset ring-gray-300 hover:bg-gray-50"
                       >
                         {p}
@@ -160,7 +170,10 @@ export default async function LeadsPage({
                   </span>
                 ))}
               {page < totalPages ? (
-                <LinkButton href={`/leads?page=${page + 1}`} variant="secondary">
+                <LinkButton
+                  href={`/leads?${buildQuery(filterParams, { page: String(page + 1) })}`}
+                  variant="secondary"
+                >
                   Siguiente →
                 </LinkButton>
               ) : null}

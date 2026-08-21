@@ -8,30 +8,35 @@ import { MarkdownText } from "@/components/markdown-text";
 import { formatDate } from "@/lib/format";
 import type { InboxMessage } from "@/lib/mail";
 
+export type RelatedEmailMessage = InboxMessage & { folder?: "inbox" | "sent" };
+
 export function EmailList({
   mailboxId,
   messages,
   signature,
 }: {
   mailboxId: string;
-  messages: InboxMessage[];
+  messages: RelatedEmailMessage[];
   signature?: string | null;
 }) {
-  const [expanded, setExpanded] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof readMessageAction>> | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function toggle(uid: number) {
-    if (expanded === uid) {
+  const keyOf = (m: RelatedEmailMessage) => `${m.folder ?? "inbox"}-${m.uid}`;
+
+  async function toggle(m: RelatedEmailMessage) {
+    const key = keyOf(m);
+    if (expanded === key) {
       setExpanded(null);
       setDetail(null);
       return;
     }
-    setExpanded(uid);
+    setExpanded(key);
     setDetail(null);
     setLoading(true);
     try {
-      const result = await readMessageAction(mailboxId, uid);
+      const result = await readMessageAction(mailboxId, m.uid, m.folder ?? "inbox");
       setDetail(result);
     } finally {
       setLoading(false);
@@ -41,30 +46,28 @@ export function EmailList({
   if (messages.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-gray-300 px-5 py-10 text-center text-sm text-gray-500">
-        No hay correos en la bandeja de entrada.
+        No hay correos asociados a este lead todavía.
       </div>
     );
   }
 
   return (
     <ul className="divide-y divide-gray-100">
-      {messages.map((m) => (
-        <li key={m.uid}>
+      {messages.map((m) => {
+        const key = keyOf(m);
+        return (
+        <li key={key}>
           <button
             type="button"
-            onClick={() => toggle(m.uid)}
+            onClick={() => toggle(m)}
             className="flex w-full items-start gap-3 px-5 py-3 text-left hover:bg-gray-50"
           >
-            <span
-              className={
-                m.seen
-                  ? "mt-1.5 h-2 w-2 shrink-0 rounded-full bg-transparent"
-                  : "mt-1.5 h-2 w-2 shrink-0 rounded-full bg-indigo-500"
-              }
-            />
+            <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-500">
+              {m.folder === "sent" ? "Enviado" : "Recibido"}
+            </span>
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-gray-900">
-                {m.from}
+                {m.folder === "sent" ? `Para: ${m.toAddress || m.from}` : m.from}
               </span>
               <span className="block truncate text-sm text-gray-500">
                 {m.subject}
@@ -80,7 +83,7 @@ export function EmailList({
             </span>
           </button>
 
-          {expanded === m.uid ? (
+          {expanded === key ? (
             <div className="border-t border-gray-100 bg-gray-50 px-5 py-4">
               {loading ? (
                 <p className="text-sm text-gray-500">Cargando correo...</p>
@@ -105,7 +108,7 @@ export function EmailList({
                         {detail.attachments.map((a) => (
                           <a
                             key={a.partId}
-                            href={`/api/mail/attachment?uid=${detail.uid}&partId=${encodeURIComponent(a.partId)}`}
+                            href={`/api/mail/attachment?uid=${detail.uid}&partId=${encodeURIComponent(a.partId)}${(m.folder ?? "") === "sent" ? "&folder=sent" : ""}`}
                             className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-700 hover:border-indigo-300 hover:text-indigo-700"
                             title={`Descargar ${a.filename}`}
                           >
@@ -131,16 +134,18 @@ export function EmailList({
                       />
                     )}
                   </div>
-                  <EmailCompose
-                    reply={{
-                      subject: detail.subject,
-                      messageId: detail.messageId,
-                      references: detail.references,
-                      text: detail.text,
-                    }}
-                    defaultTo={detail.fromAddress}
-                    signature={signature ?? undefined}
-                  />
+                  {(m.folder ?? "inbox") === "inbox" ? (
+                    <EmailCompose
+                      reply={{
+                        subject: detail.subject,
+                        messageId: detail.messageId,
+                        references: detail.references,
+                        text: detail.text,
+                      }}
+                      defaultTo={detail.fromAddress}
+                      signature={signature ?? undefined}
+                    />
+                  ) : null}
                 </div>
               ) : (
                 <p className="text-sm text-rose-600">
@@ -150,7 +155,8 @@ export function EmailList({
             </div>
           ) : null}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

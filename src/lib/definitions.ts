@@ -105,6 +105,8 @@ export const sendEmailSchema = z.object({
   signature: optionalString,
   inReplyTo: optionalString,
   references: optionalString,
+  scheduleAt: optionalString,
+  draftId: optionalString,
 });
 
 export const providerFormSchema = z.object({

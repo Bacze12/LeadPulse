@@ -9,6 +9,7 @@ export type MailboxLike = {
   imapPort: number;
   smtpHost: string;
   smtpPort: number;
+  signature?: string | null;
 };
 
 export type InboxMessage = {
@@ -195,17 +196,18 @@ async function fetchRange(
   return messages;
 }
 
-export async function listInboxPage(
+export async function listFolderPage(
   mailbox: MailboxLike,
+  folder: string,
   page = 1,
   limit = 30
 ): Promise<InboxPage> {
   const client = new ImapFlow(imapConfig(mailbox));
   try {
     await client.connect();
-    const lock = await client.getMailboxLock("INBOX");
+    const lock = await client.getMailboxLock(folder);
     try {
-      const status = await client.status("INBOX", { messages: true });
+      const status = await client.status(folder, { messages: true });
       const total = status.messages ?? 0;
       const startSeq = Math.max(1, total - page * limit + 1);
       const endSeq = Math.max(0, total - (page - 1) * limit);
@@ -220,6 +222,55 @@ export async function listInboxPage(
   } finally {
     await client.logout().catch(() => {});
   }
+}
+
+export async function listInboxPage(
+  mailbox: MailboxLike,
+  page = 1,
+  limit = 30
+): Promise<InboxPage> {
+  return listFolderPage(mailbox, "INBOX", page, limit);
+}
+
+type MailboxListItem = {
+  path: string;
+  specialUse?: string | null;
+};
+
+async function listMailboxes(client: ImapFlow): Promise<MailboxListItem[]> {
+  const boxes = await client.list();
+  return (boxes ?? []).map((b) => ({
+    path: b.path,
+    specialUse: b.specialUse ?? null,
+  }));
+}
+
+async function findSpecialFolder(
+  mailbox: MailboxLike,
+  specialUse: string,
+  namePattern: RegExp
+): Promise<string | null> {
+  const client = new ImapFlow(imapConfig(mailbox));
+  try {
+    await client.connect();
+    const boxes = await listMailboxes(client);
+    const byUse = boxes.find((b) => b.specialUse === specialUse);
+    if (byUse) return byUse.path;
+    const byName = boxes.find(
+      (b) =>
+        !b.specialUse &&
+        namePattern.test(b.path.split("/").pop() ?? b.path)
+    );
+    return byName?.path ?? null;
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+export async function resolveSentPath(
+  mailbox: MailboxLike
+): Promise<string | null> {
+  return findSpecialFolder(mailbox, "\\Sent", /^sent$/i);
 }
 
 export async function listInbox(
@@ -255,12 +306,13 @@ export async function toggleFlagged(
 
 export async function readMessage(
   mailbox: MailboxLike,
-  uid: number
+  uid: number,
+  folder = "INBOX"
 ): Promise<ReadMessage | null> {
   const client = new ImapFlow(imapConfig(mailbox));
   try {
     await client.connect();
-    const lock = await client.getMailboxLock("INBOX");
+    const lock = await client.getMailboxLock(folder);
     try {
       const msg = await client.fetchOne(String(uid), {
         uid: true,
@@ -387,12 +439,13 @@ export async function readMessage(
 export async function downloadAttachment(
   mailbox: MailboxLike,
   uid: number,
-  partId: string
+  partId: string,
+  folder = "INBOX"
 ): Promise<{ filename: string; contentType: string; content: Buffer } | null> {
   const client = new ImapFlow(imapConfig(mailbox));
   try {
     await client.connect();
-    const lock = await client.getMailboxLock("INBOX");
+    const lock = await client.getMailboxLock(folder);
     try {
       const res = await client.download(String(uid), partId, { uid: true });
       const content = await collectStream(res.content);
@@ -424,7 +477,34 @@ export async function sendMail(
     inReplyTo?: string | null;
     references?: string | null;
   }
-): Promise<void> {
+): Promise<{ raw: Buffer }> {
+  const mailOpts = {
+    from: `"${mailbox.email}" <${mailbox.email}>`,
+    to: opts.to,
+    cc: opts.cc,
+    bcc: opts.bcc,
+    subject: opts.subject,
+    text: opts.text,
+    html: opts.html ?? undefined,
+    attachments: opts.attachments,
+    inReplyTo: opts.inReplyTo ?? undefined,
+    references: opts.references ?? undefined,
+  };
+
+  let raw: Buffer = Buffer.from("");
+  try {
+    const compiler = nodemailer.createTransport({
+      streamTransport: true,
+      buffer: true,
+    });
+    const compiled = await compiler.sendMail(mailOpts);
+    raw = Buffer.isBuffer(compiled.message)
+      ? compiled.message
+      : Buffer.from(String(compiled.message ?? ""));
+  } catch {
+    raw = Buffer.from("");
+  }
+
   const transport = nodemailer.createTransport({
     host: mailbox.smtpHost,
     port: mailbox.smtpPort,
@@ -435,19 +515,34 @@ export async function sendMail(
     socketTimeout: 30000,
   });
   try {
-    await transport.sendMail({
-      from: `"${mailbox.email}" <${mailbox.email}>`,
-      to: opts.to,
-      cc: opts.cc,
-      bcc: opts.bcc,
-      subject: opts.subject,
-      text: opts.text,
-      html: opts.html ?? undefined,
-      attachments: opts.attachments,
-      inReplyTo: opts.inReplyTo ?? undefined,
-      references: opts.references ?? undefined,
-    });
+    if (raw.length > 0) {
+      await transport.sendMail({ ...mailOpts, raw });
+    } else {
+      await transport.sendMail(mailOpts);
+    }
   } finally {
     transport.close();
+  }
+  return { raw };
+}
+
+export async function saveSentCopy(
+  mailbox: MailboxLike,
+  raw: Buffer
+): Promise<boolean> {
+  if (!raw || raw.length === 0) return false;
+  try {
+    const sentPath = await resolveSentPath(mailbox);
+    if (!sentPath) return false;
+    const client = new ImapFlow(imapConfig(mailbox));
+    try {
+      await client.connect();
+      await client.append(sentPath, raw, ["\\Seen"], new Date());
+      return true;
+    } finally {
+      await client.logout().catch(() => {});
+    }
+  } catch {
+    return false;
   }
 }

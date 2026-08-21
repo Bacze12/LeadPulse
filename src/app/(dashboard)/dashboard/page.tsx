@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/requireUser";
 import { prisma } from "@/lib/db";
+import { processDueScheduledEmails } from "@/actions/mail";
 import { Card, CardHeader } from "@/components/ui/card";
 import { StatCard } from "@/components/ui/stat-card";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,8 @@ export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
   await requireUser();
+
+  await processDueScheduledEmails().catch(() => {});
 
   const [
     totalLeads,

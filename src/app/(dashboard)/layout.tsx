@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/db";
 import { Sidebar } from "@/components/sidebar";
 import { LogoutButton } from "@/components/logout-button";
 
@@ -11,6 +12,7 @@ const mobileNav = [
   { href: "/tasks", label: "Tareas" },
   { href: "/quotes", label: "Cotizaciones" },
   { href: "/correos", label: "Correos" },
+  { href: "/notificaciones", label: "Avisos" },
   { href: "/account/password", label: "Contraseña" },
 ];
 
@@ -24,10 +26,15 @@ export default async function DashboardLayout({
 
   const user = session.user;
 
+  const unreadNotifications = await prisma.notification
+    .count({ where: { userId: user.id, readAt: null } })
+    .catch(() => 0);
+
   return (
     <div className="min-h-screen">
       <Sidebar
         user={{ name: user.name, email: user.email, role: user.role }}
+        unreadNotifications={unreadNotifications}
       />
 
       <div className="lg:pl-64">

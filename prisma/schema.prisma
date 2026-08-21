@@ -75,8 +75,65 @@ model User {
   interactions   Interaction[] @relation("InteractionCreatedBy")
   mailbox        Mailbox?
   signatures     Signature[]
+  emailDrafts    EmailDraft[]
+  scheduledEmails ScheduledEmail[]
+  notifications  Notification[]
 
   @@map("users")
+}
+
+model EmailDraft {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  to         String?
+  cc         String?
+  bcc        String?
+  subject    String?
+  message    String?
+  signature  String?
+  inReplyTo  String?
+  references String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@map("email_drafts")
+}
+
+model ScheduledEmail {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       String    @default("PENDIENTE")
+  scheduledFor DateTime
+  to           String
+  cc           String?
+  bcc          String?
+  subject      String
+  message      String
+  signature    String?
+  inReplyTo    String?
+  references   String?
+  error        String?
+  createdAt    DateTime  @default(now())
+  sentAt       DateTime?
+
+  @@index([status, scheduledFor])
+  @@map("scheduled_emails")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@map("notifications")
 }
 
 model Mailbox {

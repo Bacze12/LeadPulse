@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function NewEmailPage({
   searchParams,
 }: {
-  searchParams: Promise<{ to?: string; subject?: string }>;
+  searchParams: Promise<{ to?: string; subject?: string; draft?: string }>;
 }) {
   const user = await requireUser();
   const [mailbox, signatures] = await Promise.all([
@@ -21,7 +21,13 @@ export default async function NewEmailPage({
       orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
     }),
   ]);
-  const { to, subject } = await searchParams;
+  const { to, subject, draft: draftId } = await searchParams;
+
+  const draft = draftId
+    ? await prisma.emailDraft.findFirst({
+        where: { id: draftId, userId: user.id },
+      })
+    : null;
 
   if (!mailbox) {
     return (
@@ -46,15 +52,15 @@ export default async function NewEmailPage({
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Redactar correo</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Enviando desde {mailbox.email}
+          {draft ? "Editando borrador · " : ""}Enviando desde {mailbox.email}
         </p>
       </div>
       <Card className="p-0">
         <div className="p-4">
           <EmailCompose
             defaultOpen
-            defaultTo={to}
-            defaultSubject={subject}
+            defaultTo={draft?.to ?? to}
+            defaultSubject={draft?.subject ?? subject}
             signature={mailbox.signature ?? undefined}
             savedSignatures={signatures.map((s) => ({
               id: s.id,
@@ -63,6 +69,19 @@ export default async function NewEmailPage({
               isDefault: s.isDefault,
             }))}
             triggerLabel="Nuevo correo"
+            draft={
+              draft
+                ? {
+                    id: draft.id,
+                    to: draft.to,
+                    cc: draft.cc,
+                    bcc: draft.bcc,
+                    subject: draft.subject,
+                    message: draft.message,
+                    signature: draft.signature,
+                  }
+                : null
+            }
           />
         </div>
       </Card>

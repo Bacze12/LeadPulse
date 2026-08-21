@@ -6,7 +6,8 @@ import { requireUser } from "@/lib/requireUser";
 import { prisma } from "@/lib/db";
 import { leadFormSchema } from "@/lib/definitions";
 import { emitN8n } from "@/lib/n8n";
-import { LEAD_STATUSES } from "@/lib/constants";
+import { notifyUser } from "@/lib/notifications";
+import { LEAD_STATUSES, LEAD_STATUS_LABELS } from "@/lib/constants";
 import type { LeadStatus } from "@/generated/prisma/enums";
 
 export type ActionState = { error?: string } | undefined;
@@ -146,7 +147,7 @@ export async function updateLeadStatus(
   leadId: string,
   status: string
 ): Promise<{ error?: string; success?: boolean }> {
-  await requireUser();
+  const user = await requireUser();
 
   if (!LEAD_STATUSES.includes(status as (typeof LEAD_STATUSES)[number])) {
     return { error: "Estado inválido." };
@@ -156,6 +157,15 @@ export async function updateLeadStatus(
     where: { id: leadId },
     data: { status: status as LeadStatus },
   });
+
+  if (lead.assignedToId && lead.assignedToId !== user.id) {
+    await notifyUser({
+      userId: lead.assignedToId,
+      title: `Lead "${lead.name}" cambió a ${LEAD_STATUS_LABELS[status]}`,
+      body: `${user.name ?? "Alguien"} actualizó el estado del lead.`,
+      link: `/leads/${lead.id}`,
+    });
+  }
 
   await emitN8n({
     event: "lead.status_changed",
@@ -192,7 +202,7 @@ export async function assignLead(
   leadId: string,
   userId: string
 ): Promise<{ error?: string; success?: boolean }> {
-  await requireUser();
+  const actor = await requireUser();
 
   const lead = await prisma.lead.findUnique({
     where: { id: leadId },
@@ -211,6 +221,22 @@ export async function assignLead(
     data: { assignedToId },
     include: { assignedTo: true },
   });
+
+  if (assignedToId && assignedToId !== actor.id) {
+    await notifyUser({
+      userId: assignedToId,
+      title: `Te asignaron el lead "${lead.name}"`,
+      body: `${actor.name ?? "Alguien"} te asignó este lead.`,
+      link: `/leads/${lead.id}`,
+    });
+  } else if (!assignedToId && lead.assignedTo && lead.assignedTo.id !== actor.id) {
+    await notifyUser({
+      userId: lead.assignedTo.id,
+      title: `Se quitó tu asignación del lead "${lead.name}"`,
+      body: `${actor.name ?? "Alguien"} reasignó este lead.`,
+      link: `/leads/${lead.id}`,
+    });
+  }
 
   await emitN8n({
     event: "lead.assigned",

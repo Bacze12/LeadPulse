@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { downloadAttachment } from "@/lib/mail";
+import { downloadAttachment, resolveSentPath } from "@/lib/mail";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +27,25 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    let folder = "INBOX";
+    if (sp.get("folder") === "sent") {
+      const sentPath = await resolveSentPath({
+        id: mailbox.id,
+        email: mailbox.email,
+        password: mailbox.password,
+        imapHost: mailbox.imapHost,
+        imapPort: mailbox.imapPort,
+        smtpHost: mailbox.smtpHost,
+        smtpPort: mailbox.smtpPort,
+      });
+      if (!sentPath) {
+        return NextResponse.json(
+          { error: "Adjunto no encontrado" },
+          { status: 404 }
+        );
+      }
+      folder = sentPath;
+    }
     const file = await downloadAttachment(
       {
         id: mailbox.id,
@@ -38,7 +57,8 @@ export async function GET(request: NextRequest) {
         smtpPort: mailbox.smtpPort,
       },
       uid,
-      partId
+      partId,
+      folder
     );
     if (!file) {
       return NextResponse.json({ error: "Adjunto no encontrado" }, { status: 404 });

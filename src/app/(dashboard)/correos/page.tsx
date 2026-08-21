@@ -1,17 +1,44 @@
+import Link from "next/link";
 import { requireUser } from "@/lib/requireUser";
 import { prisma } from "@/lib/db";
-import { inboxPage } from "@/actions/mail";
+import { inboxPage, processDueScheduledEmails, sentPage } from "@/actions/mail";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LinkButton } from "@/components/ui/button";
 import { MailboxConfigForm } from "@/components/mailbox-config-form";
 import { EmailInbox } from "@/components/email-inbox";
+import { SentMessages } from "@/components/sent-messages";
+import {
+  DraftsList,
+  type DraftRow,
+  type ScheduledRow,
+} from "@/components/drafts-list";
 import { SignaturesManager } from "@/components/signatures-manager";
 
 export const dynamic = "force-dynamic";
 
-export default async function CorreosPage() {
+const TABS = [
+  { id: "recibidos", label: "Recibidos" },
+  { id: "importantes", label: "Importantes" },
+  { id: "enviados", label: "Enviados" },
+  { id: "borradores", label: "Borradores" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+export default async function CorreosPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
   const user = await requireUser();
+  const sp = await searchParams;
+  const tab: TabId = TABS.some((t) => t.id === sp.tab)
+    ? (sp.tab as TabId)
+    : "recibidos";
+
+  await processDueScheduledEmails().catch(() => {});
+
   const [mailbox, signatures] = await Promise.all([
     prisma.mailbox.findUnique({
       where: { userId: user.id },
@@ -29,6 +56,12 @@ export default async function CorreosPage() {
     limit: 100,
   };
   let inboxError: string | null = null;
+  let sent: Awaited<ReturnType<typeof sentPage>> = {
+    messages: [],
+    total: 0,
+    page: 1,
+    limit: 50,
+  };
 
   if (mailbox) {
     try {
@@ -38,7 +71,30 @@ export default async function CorreosPage() {
       inboxError =
         "No se pudo conectar a la casilla. Verifica que la dirección y la contraseña sean correctas.";
     }
+    if (tab === "enviados") {
+      try {
+        sent = await sentPage(mailbox.id, 1, 50);
+      } catch (e) {
+        console.error("Error leyendo enviados:", e);
+      }
+    }
   }
+
+  const drafts: DraftRow[] =
+    tab === "borradores"
+      ? await prisma.emailDraft.findMany({
+          where: { userId: user.id },
+          orderBy: { updatedAt: "desc" },
+        })
+      : [];
+
+  const scheduled: ScheduledRow[] =
+    tab === "borradores"
+      ? await prisma.scheduledEmail.findMany({
+          where: { userId: user.id, status: "PENDIENTE" },
+          orderBy: { scheduledFor: "asc" },
+        })
+      : [];
 
   if (!mailbox) {
     return (
@@ -79,21 +135,62 @@ export default async function CorreosPage() {
         </div>
       ) : null}
 
-      <Card className="overflow-hidden p-0">
-        <EmailInbox
-          mailboxId={mailbox.id}
-          initialMessages={inbox.messages}
-          initialTotal={inbox.total}
-          initialPage={1}
-          signature={mailbox.signature}
-          savedSignatures={signatures.map((s) => ({
-            id: s.id,
-            name: s.name,
-            content: s.content,
-            isDefault: s.isDefault,
-          }))}
-        />
-      </Card>
+      <div className="flex flex-wrap gap-1.5">
+        {TABS.map((t) => (
+          <Link
+            key={t.id}
+            href={`/correos?tab=${t.id}`}
+            className={
+              "rounded-full px-4 py-1.5 text-sm font-medium transition-colors" +
+              (tab === t.id
+                ? " bg-indigo-600 text-white"
+                : " bg-gray-100 text-gray-600 hover:bg-gray-200")
+            }
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
+      {tab === "recibidos" || tab === "importantes" ? (
+        <Card className="overflow-hidden p-0">
+          <EmailInbox
+            mailboxId={mailbox.id}
+            initialMessages={inbox.messages}
+            initialTotal={inbox.total}
+            initialPage={1}
+            signature={mailbox.signature}
+            savedSignatures={signatures.map((s) => ({
+              id: s.id,
+              name: s.name,
+              content: s.content,
+              isDefault: s.isDefault,
+            }))}
+            initialFilter={tab === "importantes" ? "flagged" : "all"}
+          />
+        </Card>
+      ) : null}
+
+      {tab === "enviados" ? (
+        <Card className="overflow-hidden p-0">
+          <SentMessages
+            mailboxId={mailbox.id}
+            initialMessages={sent.messages}
+            initialTotal={sent.total}
+            emptyHint={
+              sent.total === 0
+                ? "No hay correos en tu carpeta Enviados. Los próximos envíos desde el CRM quedarán guardados aquí."
+                : undefined
+            }
+          />
+        </Card>
+      ) : null}
+
+      {tab === "borradores" ? (
+        <Card className="overflow-hidden p-0">
+          <DraftsList initialDrafts={drafts} initialScheduled={scheduled} />
+        </Card>
+      ) : null}
 
       <details className="rounded-lg border border-gray-200 bg-white">
         <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-gray-700 hover:bg-gray-50">

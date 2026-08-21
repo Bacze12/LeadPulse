@@ -21,6 +21,7 @@ export function EmailInbox({
   initialPage,
   signature,
   savedSignatures = [],
+  initialFilter = "all",
 }: {
   mailboxId: string;
   initialMessages: InboxMessage[];
@@ -33,12 +34,13 @@ export function EmailInbox({
     content: string;
     isDefault?: boolean;
   }[];
+  initialFilter?: Filter;
 }) {
   const [messages, setMessages] = useState<InboxMessage[]>(initialMessages);
   const [total, setTotal] = useState(initialTotal);
   const [page, setPage] = useState(initialPage);
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>(initialFilter);
   const [selected, setSelected] = useState<number | null>(null);
   const [detail, setDetail] = useState<Awaited<ReturnType<typeof readMessageAction>> | null>(null);
   const [loading, setLoading] = useState(false);

@@ -15,7 +15,12 @@ import { TaskItem } from "@/components/task-item";
 import { EmailList } from "@/components/email-list";
 import { EmailLink } from "@/components/email-link";
 import { ComposeEmailButton } from "@/components/compose-email-button";
-import { listInbox, type InboxMessage } from "@/lib/mail";
+import {
+  listInbox,
+  listFolderPage,
+  resolveSentPath,
+  type InboxMessage,
+} from "@/lib/mail";
 import {
   LEAD_STATUS_LABELS,
   LEAD_STATUS_STYLES,
@@ -86,18 +91,34 @@ export default async function LeadDetailPage({
   const mailbox = await prisma.mailbox.findUnique({
     where: { userId: user.id },
   });
-  let relatedEmails: InboxMessage[] = [];
+  type RelatedEmail = InboxMessage & { folder: "inbox" | "sent" };
+  const relatedEmails: RelatedEmail[] = [];
   if (mailbox && leadEmails.size > 0) {
+    const matches = (m: InboxMessage) =>
+      leadEmails.has(m.fromAddress.toLowerCase()) ||
+      leadEmails.has(m.toAddress.toLowerCase());
     try {
       const inbox = await listInbox(mailbox, 100);
-      relatedEmails = inbox.filter(
-        (m) =>
-          leadEmails.has(m.fromAddress.toLowerCase()) ||
-          leadEmails.has(m.toAddress.toLowerCase())
+      relatedEmails.push(
+        ...inbox.filter(matches).map((m) => ({ ...m, folder: "inbox" as const }))
       );
     } catch {
-      relatedEmails = [];
+      // ignore inbox errors
     }
+    try {
+      const sentPath = await resolveSentPath(mailbox);
+      if (sentPath) {
+        const sent = await listFolderPage(mailbox, sentPath, 1, 100);
+        relatedEmails.push(
+          ...sent.messages
+            .filter(matches)
+            .map((m) => ({ ...m, folder: "sent" as const }))
+        );
+      }
+    } catch {
+      // ignore sent folder errors
+    }
+    relatedEmails.sort((a, b) => b.date.getTime() - a.date.getTime());
   }
 
   type ContactRow = {
