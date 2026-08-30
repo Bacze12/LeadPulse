@@ -10,6 +10,9 @@
 /src/generated/prisma/
 /prisma/*.db
 /prisma/*.db-journal
+/prisma/migrations/*
+/prisma/seed.ts
+
 
 # Production
 /dist/
