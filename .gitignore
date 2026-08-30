@@ -41,3 +41,8 @@ next-env.d.ts
 
 # Temporary / generated
 _validate.ts
+
+.claude/
+.agents/
+.vscode/
+.cursor/
